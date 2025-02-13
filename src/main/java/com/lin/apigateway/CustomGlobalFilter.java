@@ -97,22 +97,23 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
                     if (body instanceof Flux) {
                         // body是一个Flux实例
                         Flux<? extends DataBuffer> fluxBody = Flux.from(body);
-                        return super.writeWith(fluxBody.buffer().map(dataBuffers -> {
-                            // 合并多个流集合，解决返回体分段传输
-                            DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
-                            DataBuffer buff = dataBufferFactory.join(dataBuffers);
-                            byte[] content = new byte[buff.readableByteCount()];
-                            buff.read(content);
-                            DataBufferUtils.release(buff);//释放掉内存
-                            //排除Excel导出，不是application/json不打印。若请求是上传图片则在最上面判断。
-                            MediaType contentType = originalResponse.getHeaders().getContentType();
-                            if (!MediaType.APPLICATION_JSON.isCompatibleWith(contentType)) {
-                                return bufferFactory.wrap(content);
-                            }
-                            // 构建返回日志
-                            String joinData = new String(content);
-                            // 接口调用成功，接口调用次数+1
-//                            // todo 在api-backend项目中写过invokeCount，这里调用
+                        return super.writeWith(
+                                fluxBody.buffer().map(dataBuffers -> {
+                                    // 接口调用成功，接口调用次数+1
+                                    // todo 在api-backend项目中写过invokeCount，这里调用
+                                    // 合并多个流集合，解决返回体分段传输
+                                    DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
+                                    DataBuffer buff = dataBufferFactory.join(dataBuffers);
+                                    byte[] content = new byte[buff.readableByteCount()];
+                                    buff.read(content);
+                                    DataBufferUtils.release(buff);//释放掉内存
+                                    MediaType contentType = originalResponse.getHeaders().getContentType();
+                                    if (!MediaType.APPLICATION_JSON.isCompatibleWith(contentType)) {
+                                        return bufferFactory.wrap(content);
+                                    }
+                                    // 构建返回日志
+                                    String joinData = new String(content);
+                                    log.info("响应结果" + joinData);
 //                            if (response.getStatusCode() == HttpStatus.OK) {
 //
 //                            }
@@ -120,14 +121,13 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
 //                            else {
 //                                return handleInvokeError(response);
 //                            }
-                            List<Object> rspArgs = new ArrayList<>();
-                            rspArgs.add(originalResponse.getStatusCode().value());
-                            rspArgs.add(exchange.getRequest().getURI());
-                            rspArgs.add(joinData);
-                            log.info("<-- {} {}\n{}", rspArgs.toArray());
-                            getDelegate().getHeaders().setContentLength(joinData.getBytes().length);
-                            return bufferFactory.wrap(joinData.getBytes());
-                        }));
+                                    List<Object> rspArgs = new ArrayList<>();
+                                    rspArgs.add(originalResponse.getStatusCode().value());
+                                    rspArgs.add(exchange.getRequest().getURI());
+                                    rspArgs.add(joinData);
+                                    getDelegate().getHeaders().setContentLength(joinData.getBytes().length);
+                                    return bufferFactory.wrap(joinData.getBytes());
+                                }));
                     } else {
                         log.error("<-- {} 响应code异常", getStatusCode());
                     }
