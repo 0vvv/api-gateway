@@ -2,7 +2,13 @@ package com.lin.apigateway;
 
 
 import com.lin.apiclientsdk.utils.SignUtils;
+import com.lin.apicommon.model.entity.InterfaceInfo;
+import com.lin.apicommon.model.entity.User;
+import com.lin.apicommon.service.InnerInterfaceInfoService;
+import com.lin.apicommon.service.InnerUserService;
+import com.lin.apicommon.service.UserInterfaceInfoService;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.dubbo.config.annotation.DubboReference;
 import org.reactivestreams.Publisher;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
@@ -29,12 +35,23 @@ import java.util.List;
 @Slf4j
 @Component
 public class CustomGlobalFilter implements GlobalFilter, Ordered {
+    @DubboReference
+    private InnerUserService innerUserService;
+
+    @DubboReference
+    private InnerInterfaceInfoService innerInterfaceInfoService;
+
+    @DubboReference
+    private UserInterfaceInfoService userInterfaceInfoService;
+
     private static final List<String> IP_WHITE_LIST = Arrays.asList("127.0.0.1");
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         // 打印请求日志
         ServerHttpRequest request = exchange.getRequest();
+        String path = request.getPath().value();
+        String method = request.getMethod().toString();
         log.info("请求唯一标识：{}", request.getId());
         log.info("请求路径：{}", request.getPath().value());
         log.info("请求方法：{}", request.getMethod());
@@ -54,8 +71,14 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
         String nonce = headers.getFirst("nonce");
         String timestamp = headers.getFirst("timestamp");
         String sign = headers.getFirst("sign");
-        String body = headers.getFirst("bodyq");
-        if (!accessKey.equals("lin")) {
+        String body = headers.getFirst("body");
+        User user = null;
+        try {
+            user = innerUserService.getInvokeUser(accessKey, "test");
+        } catch (Exception e) {
+            log.error("getInvokeUser error", e);
+        }
+        if (user == null) {
             return handleNoAuth(response);
         }
         if (Long.parseLong(nonce) > 10000) {
@@ -66,20 +89,24 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
         if (currentTime - Long.parseLong(timestamp) >= FIVE_MINITUES) {
             return handleNoAuth(response);
         }
-        String serverSign = SignUtils.getSign(body, "abcdefg");
+        // String secretKey = user.getSecretKey();  correct
+        String secretKey = "abcdefg"; // wrong, 因为user类的问题先不改
+        String serverSign = SignUtils.getSign(body, secretKey);
         if (!sign.equals(serverSign)) {
             return handleNoAuth(response);
         }
         // 判断请求的模拟接口是否存在
-        // todo 从数据库中查询（但是该项目没有涉及到数据库的方法，这步骤不适合放在网关项目）
-
+        InterfaceInfo interfaceInfo = innerInterfaceInfoService.getInterfaceInfo(path, method);
+        if (interfaceInfo == null) {
+            return handleNoAuth(response);
+        }
         // 转发请求，调用模拟接口
         // Mono<Void> filter = chain.filter(exchange);
-        return handleResponse(exchange, chain); // 确保按顺序执行，不被异步操作影响
+        return handleResponse(exchange, chain, interfaceInfo.getId(), user.getId()); // 确保按顺序执行，不被异步操作影响
         // 执行完上一步的接口再输出响应日志
     }
 
-    public Mono<Void> handleResponse(ServerWebExchange exchange, GatewayFilterChain chain) {
+    public Mono<Void> handleResponse(ServerWebExchange exchange, GatewayFilterChain chain, long interfaceId, long userId) {
         try {
             ServerHttpResponse originalResponse = exchange.getResponse();
             // 缓存数据
@@ -100,7 +127,11 @@ public class CustomGlobalFilter implements GlobalFilter, Ordered {
                         return super.writeWith(
                                 fluxBody.buffer().map(dataBuffers -> {
                                     // 接口调用成功，接口调用次数+1
-                                    // todo 在api-backend项目中写过invokeCount，这里调用
+                                    try {
+                                        userInterfaceInfoService.invokeCount(interfaceId, userId);
+                                    } catch (Exception e) {
+                                        log.error("invokeCount error", e);
+                                    }
                                     // 合并多个流集合，解决返回体分段传输
                                     DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
                                     DataBuffer buff = dataBufferFactory.join(dataBuffers);
